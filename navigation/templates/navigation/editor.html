@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Map Editor – Campus Indoor Navigation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Leaflet from CDN (the browser needs internet access for this page) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  *{box-sizing:border-box} html,body{height:100%;margin:0;font:14px system-ui,sans-serif;color:#1f2937}
+  body{display:grid;grid-template-rows:auto 1fr auto;grid-template-columns:1fr 330px}
+  header{grid-column:1/3;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#111827;color:#fff}
+  header select,header button,header label{font:inherit}
+  header button,.btn{background:#374151;color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer}
+  header button:hover,.btn:hover{background:#4b5563}
+  header button.active{background:#2563eb}
+  .sep{width:1px;height:22px;background:#4b5563;margin:0 4px}
+  #mapwrap{position:relative;min-height:0} #map{height:100%;background:#e5e7eb}
+  #map.mode-node,#map.mode-path{cursor:crosshair}
+  #noimg{position:absolute;inset:0;display:none;align-items:center;justify-content:center;z-index:500;background:rgba(255,255,255,.85);font-size:18px;text-align:center;padding:20px}
+  aside{overflow:auto;border-left:1px solid #d1d5db;background:#f9fafb;padding:10px;display:flex;flex-direction:column;gap:10px}
+  aside h3{margin:0 0 6px} .muted{color:#6b7280;font-size:12px}
+  label{display:block;margin:8px 0 2px;font-size:12px;color:#374151}
+  aside input[type=text],aside select{width:100%;padding:6px;border:1px solid #d1d5db;border-radius:6px}
+  aside button{margin-top:8px}
+  .btn.danger{background:#dc2626}
+  #rooms{list-style:none;margin:0;padding:0;max-height:48vh;overflow:auto}
+  #rooms li{padding:5px 6px;border-bottom:1px solid #e5e7eb;cursor:pointer;display:flex;justify-content:space-between;gap:6px}
+  #rooms li:hover{background:#e0e7ff} #rooms li.todo{color:#b45309} #rooms li.ok{color:#047857}
+  #rooms small{color:#6b7280}
+  .chip{display:inline-flex;align-items:center;gap:4px;background:#e5e7eb;border-radius:12px;padding:2px 8px;margin:2px 4px 2px 0}
+  .chip button{all:unset;cursor:pointer;color:#dc2626;font-weight:700}
+  footer{grid-column:1/3;padding:6px 12px;background:#f3f4f6;border-top:1px solid #d1d5db;font-size:13px}
+  .nd{border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #374151}
+  .nd.sel{box-shadow:0 0 0 3px #facc15,0 0 0 4px #111827} .nd.chain{box-shadow:0 0 0 4px #f97316}
+  .ntip{font-size:11px;padding:1px 5px}
+  #toast{position:fixed;bottom:44px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:8px 14px;border-radius:8px;z-index:2000;display:none;max-width:80vw}
+  #toast.bad{background:#b91c1c}
+  dialog{border:1px solid #9ca3af;border-radius:10px;padding:16px;width:340px} dialog::backdrop{background:rgba(0,0,0,.4)}
+  .legend span{display:inline-flex;align-items:center;gap:4px;margin-right:8px;font-size:12px}
+  .legend i{width:10px;height:10px;border-radius:50%;display:inline-block}
+</style>
+</head>
+<body>
+<header>
+  <strong>Map Editor</strong>
+  <select id="floorSel"></select>
+  <button id="addFloorBtn">+ Floor</button>
+  <button id="imgBtn">Image…</button>
+  <span class="sep"></span>
+  <button data-mode="select" class="active">Select (V)</button>
+  <button data-mode="node">Add node (N)</button>
+  <button data-mode="path">Draw path (P)</button>
+  <button data-mode="delete">Delete (D)</button>
+  <span class="sep"></span>
+  <label>New node type
+    <select id="nodeType"></select>
+  </label>
+  <label><input type="checkbox" id="accessibleChk" checked> New edges wheelchair-accessible</label>
+  <label><input type="checkbox" id="labelsChk"> Show room names</label>
+  <span class="sep"></span>
+  <button id="exportBtn">Export JSON</button>
+  <a href="/admin/" style="color:#9ca3af;margin-left:auto">Admin</a>
+</header>
+
+<div id="mapwrap">
+  <div id="map" class="mode-select"></div>
+  <div id="noimg"></div>
+</div>
+
+<aside>
+  <section id="panel"></section>
+  <section>
+    <h3>Rooms <span class="muted" id="roomCount"></span></h3>
+    <div class="muted">Select a node, then click an <b>unplaced</b> (○) room to attach it. Click a placed (●) room to jump to it.</div>
+    <ul id="rooms"></ul>
+  </section>
+</aside>
+
+<footer><span id="help"></span></footer>
+<div id="toast"></div>
+
+<dialog id="floorDlg">
+  <form method="dialog" id="floorForm">
+    <h3 id="dlgTitle"></h3>
+    <label id="dlgNumL">Floor number<input type="text" id="dlgNum" inputmode="numeric"></label>
+    <label id="dlgNameL">Name<input type="text" id="dlgName" placeholder="e.g. First Floor"></label>
+    <label>Floor plan image<input type="file" id="dlgImg" accept="image/*"></label>
+    <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button type="button" class="btn" id="dlgCancel">Cancel</button>
+      <button type="submit" class="btn" style="background:#2563eb">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{% verbatim %}
+<script>
+/*
+ * Map editor.
+ * Coordinates: backend stores image pixels (origin top-left). Leaflet CRS.Simple
+ * uses [lat, lng] with y growing UP, so  latlng = [H - y, x].
+ */
+(() => {
+const API = '/api';
+const TYPE_COLORS = {room:'#2563eb',corridor:'#6b7280',junction:'#a855f7',stairs:'#f59e0b',lift:'#14b8a6',entrance:'#16a34a',exit:'#dc2626'};
+const TYPE_SIZE = {corridor:10, junction:12};
+const CONNECTORS = ['stairs','lift'];
+const HELP = {
+  select:'Click to select · drag a node to move it · Del removes the selection',
+  node:'Click the map to add a node (choose its type in the toolbar)',
+  path:'Click to drop nodes — each is auto-connected to the previous one. Click an existing node to link to it. Esc ends the chain.',
+  delete:'Click a node or an edge to delete it',
+};
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const slugify = s => s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+
+let floors = [], floor = null, nodes = new Map(), edges = new Map(), rooms = [];
+let mode = 'select', sel = null, chainFrom = null, meta = null;
+let H = 0, W = 0, overlay = null, markers = new Map(), lines = new Map();
+
+// ---------- API helper ----------
+const csrf = () => (document.cookie.match(/(?:^|; )csrftoken=([^;]+)/) || [])[1] || '';
+function errText(t) {
+  try {
+    const out = [];
+    (function walk(o, p) {
+      if (Array.isArray(o)) o.forEach(v => walk(v, p));
+      else if (o && typeof o === 'object') Object.entries(o).forEach(([k, v]) => walk(v, ['non_field_errors','detail'].includes(k) ? p : k));
+      else out.push((p ? p + ': ' : '') + o);
+    })(JSON.parse(t), '');
+    return out.join('; ') || t;
+  } catch { return t.slice(0, 200); }
+}
+async function api(path, method = 'GET', body) {
+  const o = {method, credentials:'same-origin', headers:{}};
+  if (method !== 'GET') o.headers['X-CSRFToken'] = csrf();
+  if (body instanceof FormData) o.body = body;
+  else if (body !== undefined) { o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(body); }
+  const r = await fetch(API + path, o);
+  if (!r.ok) throw new Error(errText(await r.text()));
+  return r.status === 204 ? null : r.json();
+}
+let toastTimer;
+function toast(msg, bad = false) {
+  const t = $('#toast'); t.textContent = msg; t.className = bad ? 'bad' : ''; t.style.display = 'block';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.style.display = 'none', 4000);
+}
+async function run(fn) { try { return await fn(); } catch (e) { toast(e.message, true); } }
+
+// ---------- map ----------
+const map = L.map('map', {crs:L.CRS.Simple, minZoom:-3, maxZoom:3, zoomSnap:.25, attributionControl:false, doubleClickZoom:false});
+map.setView([0, 0], 0);
+const edgeLayer = L.layerGroup().addTo(map), nodeLayer = L.layerGroup().addTo(map);
+const ll = (x, y) => L.latLng(H - y, x);
+const xy = p => ({x: Math.round(p.lng * 10) / 10, y: Math.round((H - p.lat) * 10) / 10});
+const inside = p => p.lng >= 0 && p.lng <= W && p.lat >= 0 && p.lat <= H;
+
+// ---------- loading ----------
+async function loadFloors(select) {
+  floors = await api('/floors/');
+  const s = $('#floorSel');
+  s.innerHTML = floors.map(f => `<option value="${f.number}">Floor ${f.number} – ${esc(f.name)}</option>`).join('');
+  if (!floors.length) { floor = null; W = H = 0; showBanner('No floors yet — click “+ Floor”.'); renderPanel(); renderRooms(); redraw(); return; }
+  const n = select ?? floor?.number ?? floors[0].number;
+  s.value = n;
+  await loadFloor(n, true);
+}
+async function loadFloor(n, fit) {
+  const g = await api(`/floors/${n}/graph/`);
+  floor = g.floor; W = floor.width; H = floor.height;
+  nodes = new Map(g.nodes.map(x => [x.id, x]));
+  edges = new Map(g.edges.map(x => [x.id, x]));
+  rooms = g.rooms;
+  if (sel && !(sel.kind === 'node' ? nodes : edges).has(sel.id)) sel = null;
+  if (chainFrom && !nodes.has(chainFrom)) chainFrom = null;
+  if (fit) setImage();
+  redraw(); renderPanel(); renderRooms();
+}
+function showBanner(msg) { const b = $('#noimg'); b.textContent = msg; b.style.display = msg ? 'flex' : 'none'; }
+function setImage() {
+  if (overlay) { map.removeLayer(overlay); overlay = null; }
+  if (floor.image && W && H) {
+    const b = [[0, 0], [H, W]];
+    overlay = L.imageOverlay(floor.image, b).addTo(map);
+    map.setMaxBounds(L.latLngBounds(b).pad(.5));
+    map.fitBounds(b);
+    showBanner('');
+  } else {
+    showBanner('This floor has no plan image yet — click “Image…” to upload one.');
+  }
+}
+
+// ---------- drawing ----------
+function redraw() {
+  nodeLayer.clearLayers(); edgeLayer.clearLayers(); markers.clear(); lines.clear();
+  for (const e of edges.values()) {
+    const a = nodes.get(e.node_a), b = nodes.get(e.node_b); if (!a || !b) continue;
+    const on = sel && sel.kind === 'edge' && sel.id === e.id;
+    const pl = L.polyline([ll(a.x, a.y), ll(b.x, b.y)], {
+      color: e.accessible ? '#0ea5e9' : '#ea580c', weight: on ? 8 : 4, opacity: .85,
+      dashArray: e.accessible ? null : '8 6', bubblingMouseEvents: false,
+    }).addTo(edgeLayer);
+    pl.on('click', () => onEdgeClick(e.id));
+    lines.set(e.id, pl);
+  }
+  const showNames = $('#labelsChk').checked;
+  for (const n of nodes.values()) {
+    const size = TYPE_SIZE[n.type] || 16;
+    const names = rooms.filter(r => r.node === n.id).map(r => r.name);
+    const cls = 'nd' + (sel && sel.kind === 'node' && sel.id === n.id ? ' sel' : '') + (chainFrom === n.id ? ' chain' : '');
+    const icon = L.divIcon({className:'', iconSize:[size, size], iconAnchor:[size / 2, size / 2],
+      html:`<div class="${cls}" style="width:${size}px;height:${size}px;background:${TYPE_COLORS[n.type] || '#000'}"></div>`});
+    const m = L.marker(ll(n.x, n.y), {icon, draggable: mode === 'select', autoPan: false}).addTo(nodeLayer);
+    m.bindTooltip(esc(names.join(' / ') || n.label || `${n.type} #${n.id}`),
+      {direction:'top', offset:[0, -size / 2], className:'ntip', permanent: showNames && names.length > 0});
+    m.on('click', () => onNodeClick(n.id));
+    m.on('drag', ev => liveMove(n.id, ev.latlng));
+    m.on('dragend', ev => moveNode(n.id, ev.target.getLatLng()));
+    markers.set(n.id, m);
+  }
+}
+function liveMove(id, p) {  // keep connected lines glued to the dragged marker
+  for (const e of edges.values()) {
+    if (e.node_a !== id && e.node_b !== id) continue;
+    const a = e.node_a === id ? p : ll(nodes.get(e.node_a).x, nodes.get(e.node_a).y);
+    const b = e.node_b === id ? p : ll(nodes.get(e.node_b).x, nodes.get(e.node_b).y);
+    lines.get(e.id)?.setLatLngs([a, b]);
+  }
+}
+
+// ---------- node / edge operations ----------
+async function createNode(p, type) {
+  const {x, y} = xy(p);
+  const n = await run(() => api('/nodes/', 'POST', {floor: floor.id, x, y, type}));
+  if (n) nodes.set(n.id, n);
+  return n;
+}
+async function createEdge(a, b) {
+  const e = await run(() => api('/edges/', 'POST', {node_a: a, node_b: b, accessible: $('#accessibleChk').checked}));
+  if (e) edges.set(e.id, e);
+  return e;
+}
+async function moveNode(id, p) {
+  const q = L.latLng(Math.min(Math.max(p.lat, 0), H), Math.min(Math.max(p.lng, 0), W));
+  const {x, y} = xy(q);
+  await run(() => api(`/nodes/${id}/`, 'PATCH', {x, y}));
+  await loadFloor(floor.number, false);   // refresh (server recomputes edge lengths)
+}
+async function patchNode(id, body) {
+  const n = await run(() => api(`/nodes/${id}/`, 'PATCH', body));
+  if (n) nodes.set(id, n);
+  redraw(); renderPanel(); renderRooms();
+}
+async function deleteNode(id) {
+  const attached = rooms.filter(r => r.node === id);
+  if (attached.length && !confirm(`This node has ${attached.length} room(s) attached; they become unplaced. Delete?`)) return;
+  await run(() => api(`/nodes/${id}/`, 'DELETE'));
+  await loadFloor(floor.number, false);
+}
+async function deleteEdge(id) {
+  await run(() => api(`/edges/${id}/`, 'DELETE'));
+  await loadFloor(floor.number, false);
+}
+async function assignRoom(room, node) {
+  const r = await run(() => api(`/rooms/${room.id}/`, 'PATCH', {node: node.id}));
+  if (!r) return;
+  rooms = rooms.map(x => x.id === r.id ? r : x);
+  // Auto-set the node type / connector key from the room category.
+  const catType = {stairs:'stairs', lift:'lift', entrance:'entrance'};
+  const patch = {};
+  if (catType[room.category]) { if (node.type !== catType[room.category]) patch.type = catType[room.category]; }
+  else if (['corridor', 'junction'].includes(node.type)) patch.type = 'room';
+  const finalType = patch.type || node.type;
+  if (CONNECTORS.includes(finalType) && !node.connector_key) patch.connector_key = slugify(room.name);
+  if (Object.keys(patch).length) await patchNode(node.id, patch); else { redraw(); renderPanel(); renderRooms(); }
+}
+async function unassignRoom(roomId) {
+  const r = await run(() => api(`/rooms/${roomId}/`, 'PATCH', {node: null}));
+  if (r) rooms = rooms.map(x => x.id === r.id ? r : x);
+  redraw(); renderPanel(); renderRooms();
+}
+
+// ---------- click handling ----------
+async function onMapClick(ev) {
+  if (!floor || !W || !inside(ev.latlng)) return;
+  if (mode === 'node') {
+    const n = await createNode(ev.latlng, $('#nodeType').value);
+    if (n) sel = {kind:'node', id:n.id};
+  } else if (mode === 'path') {
+    const n = await createNode(ev.latlng, $('#nodeType').value);
+    if (n) { if (chainFrom) await createEdge(chainFrom, n.id); chainFrom = n.id; }
+  } else if (mode === 'select') { sel = null; }
+  redraw(); renderPanel(); renderRooms();
+}
+async function onNodeClick(id) {
+  if (mode === 'delete') return deleteNode(id);
+  if (mode === 'path') {
+    if (chainFrom === null) chainFrom = id;
+    else if (chainFrom === id) chainFrom = null;
+    else { await createEdge(chainFrom, id); chainFrom = id; }
+    redraw(); return;
+  }
+  sel = {kind:'node', id}; redraw(); renderPanel();
+}
+function onEdgeClick(id) {
+  if (mode === 'delete') return deleteEdge(id);
+  if (mode === 'select') { sel = {kind:'edge', id}; redraw(); renderPanel(); }
+}
+map.on('click', onMapClick);
+
+// ---------- side panel ----------
+function renderPanel() {
+  const el = $('#panel');
+  if (!sel) {
+    el.innerHTML = `<h3>Properties</h3><div class="muted">Select a node or edge.<br>Colours:</div>
+      <div class="legend">${Object.entries(TYPE_COLORS).map(([t, c]) => `<span><i style="background:${c}"></i>${t}</span>`).join('')}</div>
+      <div class="muted" style="margin-top:6px">Blue line = wheelchair-accessible · orange dashed = steps/not accessible.</div>`;
+    return;
+  }
+  if (sel.kind === 'node') {
+    const n = nodes.get(sel.id), here = rooms.filter(r => r.node === n.id), isConn = CONNECTORS.includes(n.type);
+    el.innerHTML = `<h3>Node #${n.id}</h3>
+      <div class="muted">x ${n.x}, y ${n.y} · QR ${esc(n.qr_code.slice(0, 8))}…</div>
+      <label>Type<select id="pType">${(meta?.node_types || []).map(t => `<option value="${t.value}" ${t.value === n.type ? 'selected' : ''}>${t.label}</option>`).join('')}</select></label>
+      <label>Label<input type="text" id="pLabel" value="${esc(n.label)}" placeholder="e.g. Corridor near Lab 1"></label>
+      <label>Connector key (stairs/lift — same key on every floor)<input type="text" id="pKey" value="${esc(n.connector_key)}" ${isConn ? '' : 'disabled'}></label>
+      <label>Rooms at this node</label>
+      <div>${here.map(r => `<span class="chip">${esc(r.name)} <button data-un="${r.id}" title="Detach">✕</button></span>`).join('') || '<span class="muted">none</span>'}</div>
+      <button class="btn danger" id="pDel">Delete node</button>`;
+    $('#pType').onchange = e => patchNode(n.id, CONNECTORS.includes(e.target.value) ? {type:e.target.value} : {type:e.target.value, connector_key:''});
+    $('#pLabel').onchange = e => patchNode(n.id, {label:e.target.value});
+    $('#pKey').onchange = e => patchNode(n.id, {connector_key:slugify(e.target.value)});
+    $('#pDel').onclick = () => deleteNode(n.id);
+    el.querySelectorAll('[data-un]').forEach(b => b.onclick = () => unassignRoom(+b.dataset.un));
+  } else {
+    const e = edges.get(sel.id), mpp = floor.meters_per_pixel;
+    el.innerHTML = `<h3>Edge #${e.id}</h3>
+      <div class="muted">Node ${e.node_a} ↔ ${e.node_b} · ${e.distance.toFixed(0)} px${mpp ? ' ≈ ' + (e.distance * mpp).toFixed(1) + ' m' : ''}</div>
+      <label><input type="checkbox" id="eAcc" ${e.accessible ? 'checked' : ''}> Wheelchair-accessible (untick for steps/stairs)</label>
+      <label>Name (used in directions)<input type="text" id="eName" value="${esc(e.name)}" placeholder="e.g. 2100mm passage"></label>
+      <button class="btn" id="eScale">Set map scale from this edge…</button>
+      <button class="btn danger" id="eDel">Delete edge</button>`;
+    const patch = body => run(() => api(`/edges/${e.id}/`, 'PATCH', body)).then(r => { if (r) edges.set(e.id, r); redraw(); renderPanel(); });
+    $('#eAcc').onchange = ev => patch({accessible: ev.target.checked});
+    $('#eName').onchange = ev => patch({name: ev.target.value});
+    $('#eDel').onclick = () => deleteEdge(e.id);
+    $('#eScale').onclick = async () => {
+      const m = parseFloat(prompt('Real length of this edge in metres (e.g. 2.1):'));
+      if (!(m > 0) || !(e.distance > 0)) return;
+      const f = await run(() => api(`/floors/${floor.number}/`, 'PATCH', {meters_per_pixel: m / e.distance}));
+      if (f) { floor = f; toast(`Scale set: ${(f.meters_per_pixel * 100).toFixed(2)} cm per pixel`); renderPanel(); }
+    };
+  }
+}
+function renderRooms() {
+  $('#roomCount').textContent = `${rooms.filter(r => r.node).length}/${rooms.length} placed`;
+  $('#rooms').innerHTML = rooms.map(r =>
+    `<li data-id="${r.id}" class="${r.node ? 'ok' : 'todo'}"><span>${r.node ? '●' : '○'} ${esc(r.name)}</span><small>${esc(r.category_display)}</small></li>`).join('');
+}
+$('#rooms').addEventListener('click', async e => {
+  const li = e.target.closest('li'); if (!li) return;
+  const r = rooms.find(x => x.id == li.dataset.id);
+  if (r.node) {
+    const n = nodes.get(r.node); sel = {kind:'node', id:n.id};
+    map.panTo(ll(n.x, n.y)); redraw(); renderPanel(); return;
+  }
+  if (!sel || sel.kind !== 'node') return toast('Select a node on the map first, then click the room.', true);
+  await assignRoom(r, nodes.get(sel.id));
+});
+
+// ---------- toolbar ----------
+function setMode(m) {
+  mode = m; chainFrom = null;
+  document.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
+  $('#map').className = 'mode-' + m;
+  $('#help').textContent = HELP[m];
+  if (m === 'path') $('#nodeType').value = 'corridor';
+  if (m === 'node') $('#nodeType').value = 'room';
+  redraw();
+}
+document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+$('#labelsChk').onchange = redraw;
+$('#floorSel').onchange = e => { sel = null; chainFrom = null; run(() => loadFloor(+e.target.value, true)); };
+$('#exportBtn').onclick = async () => {
+  if (!floor) return;
+  const g = await run(() => api(`/floors/${floor.number}/graph/`)); if (!g) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(g, null, 2)], {type:'application/json'}));
+  a.download = `floor_${floor.number}_graph.json`; a.click();
+};
+addEventListener('keydown', e => {
+  if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'v') setMode('select'); else if (k === 'n') setMode('node');
+  else if (k === 'p') setMode('path'); else if (k === 'd') setMode('delete');
+  else if (k === 'escape') { chainFrom = null; sel = null; redraw(); renderPanel(); }
+  else if ((k === 'delete' || k === 'backspace') && sel) {
+    e.preventDefault(); sel.kind === 'node' ? deleteNode(sel.id) : deleteEdge(sel.id);
+  }
+});
+
+// ---------- floor dialog (create floor / replace image) ----------
+let dlgMode = 'create';
+function openDlg(m) {
+  if (m === 'image' && !floor) return toast('Create a floor first.', true);
+  dlgMode = m;
+  $('#dlgTitle').textContent = m === 'create' ? 'Add floor' : `Plan image – Floor ${floor.number}`;
+  $('#dlgNumL').style.display = $('#dlgNameL').style.display = m === 'create' ? '' : 'none';
+  $('#dlgNum').value = m === 'create' ? (floors.length ? Math.max(...floors.map(f => f.number)) + 1 : 0) : '';
+  $('#dlgName').value = ''; $('#dlgImg').value = '';
+  $('#floorDlg').showModal();
+}
+$('#addFloorBtn').onclick = () => openDlg('create');
+$('#imgBtn').onclick = () => openDlg('image');
+$('#dlgCancel').onclick = () => $('#floorDlg').close();
+$('#floorForm').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const file = $('#dlgImg').files[0], fd = new FormData();
+  if (file) fd.append('image', file);
+  if (dlgMode === 'create') {
+    const num = $('#dlgNum').value.trim(), name = $('#dlgName').value.trim();
+    if (num === '' || !name) return toast('Floor number and name are required.', true);
+    fd.append('number', num); fd.append('name', name);
+    const f = await run(() => api('/floors/', 'POST', fd));
+    if (f) { $('#floorDlg').close(); await loadFloors(f.number); }
+  } else {
+    if (!file) return toast('Choose an image file.', true);
+    const f = await run(() => api(`/floors/${floor.number}/`, 'PATCH', fd));
+    if (f) { $('#floorDlg').close(); await loadFloor(floor.number, true); }
+  }
+});
+
+// ---------- boot ----------
+run(async () => {
+  meta = await api('/meta/');
+  $('#nodeType').innerHTML = meta.node_types.map(t => `<option value="${t.value}">${t.label}</option>`).join('');
+  $('#nodeType').value = 'corridor';
+  $('#help').textContent = HELP.select;
+  await loadFloors();
+});
+})();
+</script>
+{% endverbatim %}
+</body>
+</html>

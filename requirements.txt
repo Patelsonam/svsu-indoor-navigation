@@ -1,0 +1,12 @@
+# Core backend (Step 1)
+Django>=5.0,<5.3
+djangorestframework>=3.15
+django-cors-headers>=4.3
+Pillow>=10.0            # ImageField (floor plan images)
+whitenoise>=6.6         # static files in production
+gunicorn>=21.2          # production server (Linux hosting)
+
+# Used from later steps (installed now so the env is ready)
+networkx>=3.2           # Step 3: graph + Dijkstra/A*
+qrcode[pil]>=7.4        # Step 6: QR generator
+anthropic>=0.40         # Step 7: Claude chatbot
